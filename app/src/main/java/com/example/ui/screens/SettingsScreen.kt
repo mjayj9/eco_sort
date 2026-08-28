@@ -423,7 +423,7 @@ fun SettingsScreen(
                     Text("• 창업아이템명: 에코픽(EcoPick) - 우리 단지 분리배출 도우미", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Text("• 소속: 국립대학법인 서울대학교사범대학부설중학교 (SNUMS_psg)", fontSize = 12.sp)
                     Text("• 팀 구성: 정민재(대표/코딩), 채희범(개발/점검), 김관호(기획/문서), 정서준(개발보조)", fontSize = 12.sp)
-                    Text("• 핵심 AI 기술: Google Gemini 멀티모달 비전(Gemini 3.5 Flash) 기반 오염도 수치화 및 실시간 분리배출 세척 가이드", fontSize = 12.sp)
+                    Text("• 핵심 AI 기술: Google Gemini 멀티모달 비전(Gemini 2.5 Flash) 기반 오염도 추정 및 실시간 분리배출 세척 가이드", fontSize = 12.sp)
                 }
             }
 

@@ -219,8 +219,30 @@ object GlobalState {
         saveToPrefs()
     }
 
+    // Daily quota & anti-abuse tracking
+    var dailyRecycleCount by mutableStateOf(0)
+    var dailyPointsEarned by mutableStateOf(0)
+    private var lastRecordedDay = ""
+
+    const val MAX_DAILY_RECYCLE_COUNT = 15
+    const val MAX_DAILY_POINTS = 1500
+
     fun getApiKey(): String {
         return if (customApiKey.isNotBlank()) customApiKey.trim() else BuildConfig.GEMINI_API_KEY
+    }
+
+    private fun checkAndResetDailyQuota() {
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+        if (lastRecordedDay != today) {
+            dailyRecycleCount = 0
+            dailyPointsEarned = 0
+            lastRecordedDay = today
+        }
+    }
+
+    fun canRecycleToday(): Boolean {
+        checkAndResetDailyQuota()
+        return dailyRecycleCount < MAX_DAILY_RECYCLE_COUNT && dailyPointsEarned < MAX_DAILY_POINTS
     }
 
     fun addRecycle(
@@ -232,11 +254,22 @@ object GlobalState {
         imageHash: String = ""
     ): Int {
         if (isSuccess) {
+            checkAndResetDailyQuota()
+            if (dailyRecycleCount >= MAX_DAILY_RECYCLE_COUNT || dailyPointsEarned >= MAX_DAILY_POINTS) {
+                return 0 // 일일 적립 한도 도달
+            }
+
             currentCount++
             totalAppRecycled++
+            dailyRecycleCount++
 
-            // 기본 보상: 50P
-            var reward = 50
+            // 오염도 기반 차등 리워드 (A: 100P, B: 70P, C: 40P, F: 0P)
+            var reward = when {
+                pollutionPercent <= 10 -> 100
+                pollutionPercent <= 30 -> 70
+                pollutionPercent <= 60 -> 40
+                else -> 0
+            }
 
             // 목표 달성 시 추가 보너스 지급 (목표치 비례: 10개 달성시 +200P)
             if (currentCount == targetGoal) {
@@ -244,6 +277,12 @@ object GlobalState {
                 targetGoal += 10 // 자동으로 다음 단계 목표 상향
             }
 
+            // 일일 상한 초과분 보정
+            if (dailyPointsEarned + reward > MAX_DAILY_POINTS) {
+                reward = (MAX_DAILY_POINTS - dailyPointsEarned).coerceAtLeast(0)
+            }
+
+            dailyPointsEarned += reward
             currentPoints += reward
 
             recycleHistory.add(

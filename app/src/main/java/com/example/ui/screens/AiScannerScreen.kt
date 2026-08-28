@@ -725,18 +725,24 @@ fun AiScannerScreen() {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
-                            .padding(bottom = 8.dp)
+                            .padding(bottom = 4.dp)
                             .fillMaxWidth()
                     ) {
                         Text("🤖", fontSize = 20.sp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "AI 오염도 & 분리배출 정밀 분석",
+                            "AI 비전 오염도 분석 및 가이드",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
+                    Text(
+                        "※ 본 결과는 AI 비전 영상 추정치이며, 실제 선별장 및 지자체 세부 기준과 일부 다를 수 있습니다.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    )
 
                     // Key Summary Cards Row
                     Row(

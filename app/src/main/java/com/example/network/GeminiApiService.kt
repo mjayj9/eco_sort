@@ -71,14 +71,19 @@ data class Candidate(
 
 // --- Retrofit Setup ---
 
+object GeminiModelConstants {
+    const val PRIMARY_MODEL = "gemini-2.5-flash"
+    const val FALLBACK_MODEL = "gemini-2.5-flash-lite"
+}
+
 interface GeminiApiService {
-    @POST("v1beta/models/gemini-3.5-flash:generateContent")
+    @POST("v1beta/models/gemini-2.5-flash:generateContent")
     suspend fun generateContent(
         @Query("key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
 
-    @POST("v1beta/models/gemini-2.5-flash:generateContent")
+    @POST("v1beta/models/gemini-2.5-flash-lite:generateContent")
     suspend fun generateContentFallback(
         @Query("key") apiKey: String,
         @Body request: GenerateContentRequest

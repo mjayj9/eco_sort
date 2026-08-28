@@ -36,6 +36,44 @@ fun Bitmap.toBase64AndResize(): String {
     return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
 }
 
+// --- Eco Grade Calculation Engine ---
+
+object EcoGradeCalculator {
+    /**
+     * 오염도(%)를 바탕으로 빈틈없는 분리배출 등급을 산정합니다:
+     * - A등급 (오염도 <= 10.0%): 즉시 분리배출 가능 (포인트 +100P)
+     * - B등급 (10.0% < 오염도 <= 30.0%): 가벼운 헹굼 후 배출 (+70P)
+     * - C등급 (30.0% < 오염도 <= 60.0%): 정밀 세척 필요 (+40P)
+     * - F등급 (오염도 > 60.0%): 재활용 불가, 종량제 봉투 배출 (0P)
+     */
+    fun calculateGrade(pollutionPercent: Double): String {
+        return when {
+            pollutionPercent <= 10.0 -> "A"
+            pollutionPercent <= 30.0 -> "B"
+            pollutionPercent <= 60.0 -> "C"
+            else -> "F"
+        }
+    }
+
+    fun getGradeLevel(pollutionPercent: Double): Int {
+        return when {
+            pollutionPercent <= 10.0 -> 0 // A
+            pollutionPercent <= 30.0 -> 1 // B
+            pollutionPercent <= 60.0 -> 2 // C
+            else -> 3                     // F
+        }
+    }
+
+    fun getPointsForPollution(pollutionPercent: Double): Int {
+        return when {
+            pollutionPercent <= 10.0 -> 100
+            pollutionPercent <= 30.0 -> 70
+            pollutionPercent <= 60.0 -> 40
+            else -> 0
+        }
+    }
+}
+
 object AiVisionRepository {
 
     private fun extractJsonFromResponse(rawText: String): String {
@@ -50,7 +88,7 @@ object AiVisionRepository {
     }
 
     /**
-     * Gemini 멀티모달 AI(Gemini 3.5 Flash)를 이용해 쓰레기 이미지의 오염도, 재질, 세척법, 배출법을 정밀 분석합니다.
+     * Gemini 멀티모달 AI(Gemini 2.5 Flash)를 이용해 쓰레기 이미지의 오염도, 재질, 세척법, 배출법을 비전 분석합니다.
      */
     suspend fun analyzeWasteImage(bitmap: Bitmap): String = withContext(Dispatchers.IO) {
         val apiKey = GlobalState.getApiKey()
