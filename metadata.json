@@ -1,6 +1,6 @@
 {
-  "name": "Remix 에코소트 (EcoSort)",
-  "description": "AI 기반 배달 쓰레기 분리배출 도우미 웹앱 (안드로이드 네이티브 최적화 버전)",
+  "name": "에코픽 (EcoPick)",
+  "description": "AI 기반 배달 쓰레기 오염도 분석 및 단지 분리배출 도우미 (2026 대한민국 청소년 창업경진대회 출품작)",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

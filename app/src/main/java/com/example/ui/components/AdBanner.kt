@@ -5,7 +5,12 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -19,23 +24,43 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun AdBanner() {
     val context = LocalContext.current
-    
-    // 심사 포인트: 수익 모델이 '쿠폰 제휴'만이 아니라 '광고'로도 확장됨을 보여주는 용도.
-    // 향후 Google Ads (https://ads.google.com) 연동을 지원하도록 URL 클릭 인텐트 제공.
-    Box(
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(60.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ads.google.com"))
                 context.startActivity(intent)
             },
-        contentAlignment = Alignment.Center
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("[Google 스폰서 광고] ", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
-            Text("자연을 사랑하는 OO기업 리필 스테이션!", fontSize = 14.sp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.primary,
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text(
+                    "Google 스폰서 AD",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 9.sp,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "🌱 지구를 지키는 친환경 리필 스테이션 & 제로웨이스트",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
         }
     }
 }

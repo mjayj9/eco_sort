@@ -1,56 +1,80 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.repository.AiVisionRepository
-import com.example.util.ImageHashUtil
+import com.example.repository.FirestoreRepository
 import com.example.util.GlobalState
+import com.example.util.ImageHashUtil
 import kotlinx.coroutines.launch
 import org.json.JSONObject
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import androidx.core.content.ContextCompat
 
-fun getBitmapFromDrawable(context: android.content.Context, resId: Int): Bitmap {
-    val drawable = ContextCompat.getDrawable(context, resId) ?: return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-    val bitmap = Bitmap.createBitmap(
-        if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 300,
-        if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 300,
-        Bitmap.Config.ARGB_8888
-    )
+fun getBitmapFromDrawable(context: Context, resId: Int): Bitmap {
+    val drawable = ContextCompat.getDrawable(context, resId) ?: return Bitmap.createBitmap(300, 300, Bitmap.Config.ARGB_8888)
+    val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 400
+    val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 400
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     drawable.setBounds(0, 0, canvas.width, canvas.height)
     drawable.draw(canvas)
     return bitmap
 }
 
+fun getBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+    return try {
+        val inputStream = context.contentResolver.openInputStream(uri)
+        BitmapFactory.decodeStream(inputStream)
+    } catch (e: Exception) {
+        null
+    }
+}
 
 enum class ScanStep { INITIAL, ANALYZED, DONE }
 
@@ -59,63 +83,167 @@ enum class ScanStep { INITIAL, ANALYZED, DONE }
 fun AiScannerScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    
+
     val apartmentId = GlobalState.apartmentId
     var capturedImage by remember { mutableStateOf<Bitmap?>(null) }
+    var verifyImage by remember { mutableStateOf<Bitmap?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var loadingMessage by remember { mutableStateOf("AI가 오염도를 정밀 분석 중입니다...") }
     var resultJson by remember { mutableStateOf<JSONObject?>(null) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
-    
+    var earnedPoints by remember { mutableIntStateOf(0) }
+
     var scanStep by remember { mutableStateOf(ScanStep.INITIAL) }
     var firstImageHash by remember { mutableStateOf<String?>(null) }
     var lastAnalysisTime by remember { mutableStateOf(0L) }
     var showGuideDialog by remember { mutableStateOf(false) }
-    
+
+    // Helper to start real AI analysis
+    fun startRealAiAnalysis(bitmap: Bitmap) {
+        capturedImage = bitmap
+        isLoading = true
+        loadingMessage = "Gemini AI가 쓰레기 오염도와 재질을 분석 중입니다..."
+        errorMsg = null
+        resultJson = null
+
+        coroutineScope.launch {
+            try {
+                val resultStr = AiVisionRepository.analyzeWasteImage(bitmap)
+                isLoading = false
+                val cleanResult = resultStr.trim()
+                val json = JSONObject(cleanResult)
+
+                if (json.has("error")) {
+                    errorMsg = json.getString("error")
+                } else {
+                    val isSuccess = json.optBoolean("판독_성공", true)
+                    if (isSuccess) {
+                        resultJson = json
+                        scanStep = ScanStep.ANALYZED
+                        firstImageHash = ImageHashUtil.generateImageHash(bitmap)
+                        lastAnalysisTime = System.currentTimeMillis()
+                    } else {
+                        errorMsg = json.optString(
+                            "불가_사유",
+                            "판독이 불가합니다. 어둡거나 흔들렸다면 밝은 곳에 두고 다시 촬영해주세요."
+                        )
+                        capturedImage = null
+                        resultJson = null
+                    }
+                }
+            } catch (e: Exception) {
+                isLoading = false
+                errorMsg = "AI 분석 응답 처리 중 오류가 발생했습니다: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    // Helper to verify disposal background
+    fun startDisposalVerification(bitmap: Bitmap) {
+        val newHash = ImageHashUtil.generateImageHash(bitmap)
+        val timeDiff = System.currentTimeMillis() - lastAnalysisTime
+
+        if (newHash == firstImageHash) {
+            errorMsg = "동일한 사진은 2차 인증에 사용할 수 없습니다. (어뷰징 방지: 사진 해시 일치)"
+            return
+        }
+        if (timeDiff < 2000) {
+            errorMsg = "분석 후 최소 2초 뒤에 배출 인증이 가능합니다 (어뷰징 방지)."
+            return
+        }
+
+        verifyImage = bitmap
+        isLoading = true
+        loadingMessage = "배출 장소(분리수거함/쓰레기통)를 AI로 검증 중입니다..."
+        errorMsg = null
+
+        coroutineScope.launch {
+            try {
+                val resultStr = AiVisionRepository.verifyDisposalBackground(bitmap)
+                isLoading = false
+                val verifyJson = JSONObject(resultStr.trim())
+
+                if (verifyJson.has("error")) {
+                    errorMsg = verifyJson.getString("error")
+                } else {
+                    val isPass = verifyJson.optBoolean("통과", true)
+                    if (isPass) {
+                        val material = resultJson?.optString("재질", "플라스틱") ?: "플라스틱"
+                        val itemName = resultJson?.optString("품목명", "배달 용기") ?: "배달 용기"
+                        val pollution = resultJson?.optInt("오염도_퍼센트", 0) ?: 0
+                        val grade = resultJson?.optInt("등급", 0) ?: 0
+
+                        val reward = GlobalState.addRecycle(
+                            material = material,
+                            isSuccess = true,
+                            itemName = itemName,
+                            pollutionPercent = pollution,
+                            grade = grade,
+                            imageHash = newHash
+                        )
+                        FirestoreRepository.verifyAndReward(
+                            apartmentId = apartmentId,
+                            points = reward,
+                            material = material,
+                            itemName = itemName,
+                            pollutionPercent = pollution,
+                            grade = grade,
+                            imageHash = newHash
+                        )
+                        earnedPoints = reward
+                        scanStep = ScanStep.DONE
+                    } else {
+                        errorMsg = verifyJson.optString(
+                            "사유",
+                            "분리수거함이나 올바른 배출장소가 인식되지 않았습니다. 배경에 분리수거함이 보이도록 다시 찍어주세요."
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                isLoading = false
+                errorMsg = "배경 인식 중 오류가 발생했습니다. 다시 시도해주세요."
+            }
+        }
+    }
+
+    // Camera Launcher for 1st scan
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
         if (bitmap != null) {
-            capturedImage = bitmap
-            resultJson = null
-            errorMsg = null
-            scanStep = ScanStep.INITIAL
+            startRealAiAnalysis(bitmap)
         }
     }
 
+    // Gallery Launcher for 1st scan
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val bitmap = getBitmapFromUri(context, uri)
+            if (bitmap != null) {
+                startRealAiAnalysis(bitmap)
+            }
+        }
+    }
+
+    // Camera Launcher for 2nd verification
     val verifyCameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
         if (bitmap != null) {
-            val newHash = ImageHashUtil.generateImageHash(bitmap)
-            val timeDiff = System.currentTimeMillis() - lastAnalysisTime
-            
-            if (newHash == firstImageHash) {
-                errorMsg = "동일하거나 유효하지 않은 사진은 인증할 수 없습니다."
-            } else if (timeDiff < 3000) {
-                errorMsg = "분석 후 최소 3초 뒤에 배출 인증이 가능합니다 (어뷰징 방지)."
-            } else {
-                isLoading = true
-                coroutineScope.launch {
-                    val resultStr = AiVisionRepository.verifyDisposalBackground(bitmap)
-                    isLoading = false
-                    try {
-                        val cleanResult = resultStr?.replace("```json", "")?.replace("```", "")?.trim()
-                        val verifyJson = JSONObject(cleanResult ?: "{}")
-                        if (verifyJson.has("error")) {
-                            errorMsg = verifyJson.getString("error")
-                        } else {
-                            val isPass = verifyJson.optBoolean("통과", false)
-                            if (isPass) {
-                                GlobalState.addRecycle(resultJson?.optString("재질", "플라스틱") ?: "플라스틱", true)
-                                scanStep = ScanStep.DONE
-                            } else {
-                                errorMsg = verifyJson.optString("사유", "분리수거함이나 올바른 배출장소가 인식되지 않았습니다. 배경에 분리수거함이 보이도록 다시 찍어주세요.")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        errorMsg = "배경 인식 중 오류가 발생했습니다. 다시 촬영해 주세요."
-                    }
-                }
+            startDisposalVerification(bitmap)
+        }
+    }
+
+    // Gallery Launcher for 2nd verification
+    val verifyGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            val bitmap = getBitmapFromUri(context, uri)
+            if (bitmap != null) {
+                startDisposalVerification(bitmap)
             }
         }
     }
@@ -130,21 +258,48 @@ fun AiScannerScreen() {
                 cameraLauncher.launch(null)
             }
         } else {
-            errorMsg = "설정에서 카메라 권한을 허용해 주세요."
+            errorMsg = "카메라를 사용하려면 권한을 허용해주세요. 갤러리에서 사진을 선택할 수도 있습니다."
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("AI 스캐너 (목표: ${GlobalState.currentCount}/${GlobalState.targetGoal})") },
+                title = {
+                    Column {
+                        Text(
+                            "AI 스캐너 (목표: ${GlobalState.currentCount}/${GlobalState.targetGoal})",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "단지: $apartmentId",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                },
                 actions = {
-                    Text(
-                        text = "${GlobalState.currentPoints}P",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(end = 16.dp)
-                    )
+                    IconButton(onClick = { showGuideDialog = true }) {
+                        Icon(
+                            Icons.Default.HelpOutline,
+                            contentDescription = "분리배출 가이드",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.padding(end = 12.dp)
+                    ) {
+                        Text(
+                            text = "${GlobalState.currentPoints}P",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            fontSize = 14.sp
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
@@ -160,138 +315,219 @@ fun AiScannerScreen() {
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 카메라 영역
+            // Main image preview box
             if (capturedImage == null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(300.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium),
+                        .height(240.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant,
+                            RoundedCornerShape(16.dp)
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            contentDescription = "카메라",
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.CameraAlt,
+                                    contentDescription = "카메라",
+                                    modifier = Modifier.size(32.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "배달 쓰레기 사진을 촬영하거나 선택하세요",
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("버튼을 눌러 쓰레기 사진을 촬영하세요", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Gemini 멀티모달 AI가 오염도와 재활용 방법을 실시간 판정합니다",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
-                // 예시 시뮬레이터 (사용자 요청에 따라 가이드 대신 직접 클릭해서 테스트)
-                Card(modifier = Modifier.fillMaxWidth()) {
+
+                // Primary Action Buttons (Camera & Gallery)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("scan_camera_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("카메라 촬영", fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = { galleryLauncher.launch("image/*") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("scan_gallery_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("갤러리 사진", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Interactive AI Demonstration Cards (Uses REAL AI Vision)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("💡 AI 판독 체험해보기", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
-                        Text("아래 사진을 클릭하면 실제 카메라 촬영과 동일하게 AI가 평가합니다.", style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            val cleanResId = com.example.R.drawable.clean_bottle
-                            val dirtyResId = com.example.R.drawable.dirty_plate
-                            
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
-                                isLoading = true
-                                errorMsg = null
-                                coroutineScope.launch {
-                                    val bitmap = getBitmapFromDrawable(context, cleanResId)
-                                    capturedImage = bitmap
-                                    // Analyze Image automatically - Bypass real AI for strict Admin test mock to ensure EXACT example output
-                                    val mockJson = """
-                                        {
-                                          "판독_성공": true,
-                                          "재질": "플라스틱",
-                                          "오염도_퍼센트": 0,
-                                          "등급": 0,
-                                          "상태": "깨끗한 플라스틱 용기 감지",
-                                          "피드백": "오염이 전혀 없는 깨끗한 상태입니다. 라벨과 뚜껑을 본체 소재와 다를 경우 분리해서 배출하시면 더 좋습니다.",
-                                          "헹굼_권장여부": false,
-                                          "배출방법": "분리배출함에 정상 배출 가능합니다.",
-                                          "불가_사유": ""
-                                        }
-                                    """.trimIndent()
-                                    
-                                    try {
-                                        resultJson = org.json.JSONObject(mockJson)
-                                        scanStep = ScanStep.ANALYZED
-                                        firstImageHash = "test_mock_1"
-                                        lastAnalysisTime = System.currentTimeMillis()
-                                    } catch (e: Exception) {
-                                        errorMsg = "결과 해석 중 오류 발생"
-                                    }
-                                    isLoading = false
-                                }
-                            }) {
-                                Image(
-                                    painter = androidx.compose.ui.res.painterResource(id = cleanResId),
-                                    contentDescription = "Clean test image",
-                                    modifier = Modifier.height(100.dp).padding(4.dp),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                                )
-                                Text("✅ 통과 예시 (클릭)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                            }
-                            
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("✨", fontSize = 18.sp)
                             Spacer(modifier = Modifier.width(8.dp))
-                            
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
-                                isLoading = true
-                                errorMsg = null
-                                coroutineScope.launch {
-                                    val bitmap = getBitmapFromDrawable(context, dirtyResId)
-                                    capturedImage = bitmap
-                                    // Analyze Image automatically - Bypass real AI for strict Admin test mock to ensure EXACT example output
-                                    val mockJson = """
-                                        {
-                                          "판독_성공": true,
-                                          "재질": "플라스틱 (또는 코팅 종이)",
-                                          "오염도_퍼센트": 65,
-                                          "등급": 2,
-                                          "상태": "음식물 찌꺼기 및 양념 자국 감지",
-                                          "피드백": "이대로는 재활용이 불가능합니다. 남은 음식물을 비우고 물로 깨끗이 헹궈 양념을 완전히 제거해주세요.",
-                                          "헹굼_권장여부": true,
-                                          "배출방법": "오염물이 완벽히 제거되었다면 분리배출 하시고, 붉은 자국 등이 지워지지 않는다면 일반쓰레기로 종량제 봉투에 배출하세요.",
-                                          "불가_사유": ""
-                                        }
-                                    """.trimIndent()
-                                    
-                                    try {
-                                        resultJson = org.json.JSONObject(mockJson)
-                                        scanStep = ScanStep.ANALYZED
-                                        firstImageHash = "test_mock_2"
-                                        lastAnalysisTime = System.currentTimeMillis()
-                                    } catch (e: Exception) {
-                                        errorMsg = "결과 해석 중 오류 발생"
-                                    }
-                                    isLoading = false
+                            Text(
+                                "실시간 AI 판독 샘플 테스트",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            "샘플을 탭하면 실제 AI가 이미지를 분석하여 실시간 판정합니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            val cleanResId = R.drawable.clean_bottle
+                            val dirtyResId = R.drawable.dirty_plate
+
+                            // Clean sample card
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        val bitmap = getBitmapFromDrawable(context, cleanResId)
+                                        startRealAiAnalysis(bitmap)
+                                    },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(8.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = cleanResId),
+                                        contentDescription = "깨끗한 페트병 샘플",
+                                        modifier = Modifier
+                                            .height(90.dp)
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        "🟢 깨끗한 페트병 (AI 분석)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        textAlign = TextAlign.Center
+                                    )
                                 }
-                            }) {
-                                Image(
-                                    painter = androidx.compose.ui.res.painterResource(id = dirtyResId),
-                                    contentDescription = "Dirty test image",
-                                    modifier = Modifier.height(100.dp).padding(4.dp),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                                )
-                                Text("❌ 거절 예시 (클릭)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+
+                            // Dirty sample card
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        val bitmap = getBitmapFromDrawable(context, dirtyResId)
+                                        startRealAiAnalysis(bitmap)
+                                    },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(8.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = dirtyResId),
+                                        contentDescription = "오염된 용기 샘플",
+                                        modifier = Modifier
+                                            .height(90.dp)
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        "🔴 양념 오염 용기 (AI 분석)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
                     }
                 }
             } else {
+                // Image Display Box with Real Bounding Box Canvas
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(300.dp),
+                        .height(280.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
                         bitmap = capturedImage!!.asImageBitmap(),
-                        contentDescription = "촬영된 이미지",
-                        modifier = Modifier.fillMaxSize()
+                        contentDescription = "촬영된 쓰레기 이미지",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
                     )
 
+                    // Draw AI Bounding Box on top of Image
                     resultJson?.let {
                         val bbox = it.optJSONObject("오염부분_좌표")
                         if (bbox != null) {
@@ -307,11 +543,12 @@ fun AiScannerScreen() {
                                 val top = ymin * canvasHeight
                                 val right = xmax * canvasWidth
                                 val bottom = ymax * canvasHeight
+
                                 drawRect(
                                     color = Color.Red,
                                     topLeft = Offset(left, top),
-                                    size = Size(right - left, bottom - top),
-                                    style = Stroke(width = 8f)
+                                    size = Size((right - left).coerceAtLeast(10f), (bottom - top).coerceAtLeast(10f)),
+                                    style = Stroke(width = 6f)
                                 )
                             }
                         }
@@ -319,7 +556,7 @@ fun AiScannerScreen() {
 
                     if (isLoading) {
                         Surface(
-                            color = Color.Black.copy(alpha = 0.6f),
+                            color = Color.Black.copy(alpha = 0.7f),
                             modifier = Modifier.fillMaxSize()
                         ) {
                             Column(
@@ -329,247 +566,377 @@ fun AiScannerScreen() {
                             ) {
                                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.height(16.dp))
-                                Text("AI가 오염도를 정밀 분석 중입니다...", color = Color.White)
+                                Text(
+                                    loadingMessage,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 14.sp
+                                )
                             }
                         }
                     }
                 }
             }
-            
+
+            // Error Display
             errorMsg?.let {
-                Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = "경고",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
             }
 
+            // Step: DONE (Success Celebration)
             if (scanStep == ScanStep.DONE) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("🎊 분리배출 완료! 🎊", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("에코 포인트 적립 완료", fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "성공",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("🎊 분리배출 실천 인증 완료! 🎊", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "+${earnedPoints} 에코 포인트 적립 완료!",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text("($apartmentId 누적 카운트에 반영되었습니다)", fontSize = 12.sp)
+                        Text(
+                            "[$apartmentId] 단지 누적 실적 및 랭킹에 즉시 반영되었습니다.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = {
+                        val shareText = """
+                            🌿 나는 오늘 지구를 구했어요!
+                            [$apartmentId] 단지 분리배출 챌린지 참여 중!
+                            내 에코 포인트: ${GlobalState.currentPoints}P (${GlobalState.currentCount}회 달성)
+                            #에코픽 #EcoPick #분리배출 #ESG #AI스마트분리수거
+                        """.trimIndent()
+
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, shareText)
+                            type = "text/plain"
+                        }
+                        val shareIntent = Intent.createChooser(sendIntent, "나의 에코 실천 자랑하기")
+                        context.startActivity(shareIntent)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("캠페인 자랑하기 (SNS 공유)", fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        capturedImage = null
+                        verifyImage = null
+                        resultJson = null
+                        scanStep = ScanStep.INITIAL
+                        errorMsg = null
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("새로운 쓰레기 스캔하기")
+                }
             } else {
+                // Step: ANALYZED (Show AI Output)
                 resultJson?.let {
                     val pollutionLevel = it.optInt("오염도_퍼센트", 0)
                     val grade = it.optInt("등급", 0)
-                    val method = it.optString("배출방법", "")
-                    val material = it.optString("재질", "")
+                    val method = it.optString("배출방법", "분리배출함에 배출")
+                    val material = it.optString("재질", "플라스틱")
+                    val itemName = it.optString("품목명", "배달 용기")
                     val feedback = it.optString("피드백", "")
-                    
                     val stateText = it.optString("상태", material)
+
                     val isPass = grade <= 1
                     val isWashable = grade == 2
-                    val isTrash = grade >= 3
-                    
+
                     val statusColor = when {
                         isPass -> MaterialTheme.colorScheme.primary
-                        isWashable -> androidx.compose.ui.graphics.Color(0xFFF57C00) // Orange
+                        isWashable -> Color(0xFFF57C00) // Orange
                         else -> MaterialTheme.colorScheme.error
                     }
                     val statusContainerColor = when {
-                        isPass -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                        isWashable -> androidx.compose.ui.graphics.Color(0xFFFFF3E0)
-                        else -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                        isPass -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                        isWashable -> Color(0xFFFFF3E0)
+                        else -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
                     }
                     val classificationText = when {
-                         isPass -> "재활용 가능"
-                         isWashable -> "세척 후 분리배출"
-                         else -> "일반쓰레기 (종량제)"
+                        isPass -> "재활용 가능"
+                        isWashable -> "세척 후 분리배출"
+                        else -> "일반쓰레기 (종량제)"
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // 분석 결과 Header
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth()) {
-                        Text("✅", fontSize = 20.sp)
+
+                    // Result Header
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .padding(bottom = 8.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text("🤖", fontSize = 20.sp)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("분석 결과", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            "AI 오염도 & 분리배출 정밀 분석",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
-                    
-                    // Cards Row
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // 인식된 물품
+
+                    // Key Summary Cards Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Card(
                             modifier = Modifier.weight(1f),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("📦", fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("인식된 물품", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(material, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("📦 인식 물품 및 재질", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "$material\n($itemName)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    lineHeight = 18.sp
+                                )
                             }
                         }
-                        
-                        // 분류
+
                         Card(
                             modifier = Modifier.weight(1f),
                             colors = CardDefaults.cardColors(containerColor = statusContainerColor),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.3f))
+                            border = BorderStroke(1.dp, statusColor.copy(alpha = 0.4f))
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("📚", fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("분류", fontSize = 12.sp, color = statusColor)
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(classificationText, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = statusColor)
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("🏷️ 분리배출 판정", fontSize = 11.sp, color = statusColor)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    classificationText,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = statusColor
+                                )
+                                Text(
+                                    "오염도 ${pollutionLevel}% (등급 $grade)",
+                                    fontSize = 11.sp,
+                                    color = statusColor
+                                )
                             }
                         }
                     }
-                    
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
-                    // Details Card
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Comprehensive Guide Details Card
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            // 현재 상태
+                            // Current Status Section
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("🔍", fontSize = 14.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("현재 상태", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "현재 상태 (AI 비전 진단)",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-                            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                                Spacer(modifier = Modifier.width(7.dp))
-                                Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(statusColor.copy(alpha = 0.5f)))
-                                Spacer(modifier = Modifier.width(17.dp))
-                                Text(if (pollutionLevel > 0) "오염도 ${pollutionLevel}% - $stateText" else "오염도 0% - 깨끗한 상태", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp).padding(bottom = 8.dp))
-                            }
-                            
-                            // 세척 가이드
+                            Text(
+                                if (pollutionLevel > 0) "오염도 ${pollutionLevel}% - $stateText" else "오염도 0% - 매우 깨끗한 상태",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 22.dp, top = 4.dp, bottom = 12.dp),
+                                fontWeight = FontWeight.Medium
+                            )
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Washing & Preparation Guide
                             if (feedback.isNotEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("🚿", fontSize = 14.sp)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("세척 및 분리 가이드", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "세척 및 분리 가이드",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
-                                Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                                    Spacer(modifier = Modifier.width(7.dp))
-                                    Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(androidx.compose.ui.graphics.Color(0xFF4FC3F7)))
-                                    Spacer(modifier = Modifier.width(17.dp))
-                                    Text(feedback, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp).padding(bottom = 8.dp))
-                                }
+                                Text(
+                                    feedback,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(start = 22.dp, top = 4.dp, bottom = 12.dp)
+                                )
+
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                Spacer(modifier = Modifier.height(10.dp))
                             }
-                            
-                            // 최종 배출 방법
+
+                            // Final Disposal Method
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("♻️", fontSize = 14.sp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("최종 배출 방법", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "최종 배출 방법 안내",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-                            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                                Spacer(modifier = Modifier.width(7.dp))
-                                Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(statusColor.copy(alpha = 0.5f)))
-                                Spacer(modifier = Modifier.width(17.dp))
-                                Text(method, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp))
+                            Text(
+                                method,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(start = 22.dp, top = 4.dp),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // 2nd Stage Verification Action Card
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f))
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                "📸 2차 실천 인증 (배출 장소 확인)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                "실제로 분리수거함이나 쓰레기통에 배출하는 모습을 인증하면 에코 포인트를 지급합니다.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        errorMsg = null
+                                        permissionLauncher.launch(Manifest.permission.CAMERA)
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("verify_camera_button"),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("배출 인증 촬영", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        errorMsg = null
+                                        verifyGalleryLauncher.launch("image/*")
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("verify_gallery_button"),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("인증 사진 선택", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
-                }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                if (scanStep == ScanStep.DONE) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        Button(
-                            onClick = {
-                                val sendIntent: Intent = Intent().apply {
-                                    action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, "나는 오늘 지구를 구했어요! (내 에코 포인트: ${GlobalState.currentPoints}점 / $apartmentId 내 1위 우수주민)\n#에코소트 #친환경 #분리배출 #에코포인트")
-                                    type = "text/plain"
-                                }
-                                val shareIntent = Intent.createChooser(sendIntent, null)
-                                context.startActivity(shareIntent)
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("캠페인 공유하기 (자랑하기)")
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Button(onClick = {
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    TextButton(
+                        onClick = {
                             capturedImage = null
                             resultJson = null
                             scanStep = ScanStep.INITIAL
                             errorMsg = null
-                        }) {
-                            Text("새로운 쓰레기 스캔하기")
-                        }
-                    }
-                } else if (scanStep == ScanStep.ANALYZED) {
-                    Button(onClick = {
-                        errorMsg = null
-                        permissionLauncher.launch(Manifest.permission.CAMERA)
-                    }, modifier = Modifier.fillMaxWidth()) {
-                        Text("쓰레기통에 버리고 2차 인증하기 (+포인트 적립)", fontWeight = FontWeight.Bold)
-                    }
-                } else {
-                    Button(onClick = {
-                        permissionLauncher.launch(Manifest.permission.CAMERA)
-                    }) {
-                        Text(if (capturedImage == null) "카메라 실행" else "다시 촬영")
-                    }
-
-                    if (capturedImage != null && !isLoading) {
-                        Button(onClick = {
-                            isLoading = true
-                            errorMsg = null
-                            coroutineScope.launch {
-                                val resultStr = AiVisionRepository.analyzeWasteImage(capturedImage!!)
-                                isLoading = false
-                                try {
-                                    val cleanResult = resultStr?.replace("```json", "")?.replace("```", "")?.trim()
-                                    resultJson = JSONObject(cleanResult ?: "{}")
-                                    if (resultJson?.has("error") == true) {
-                                        errorMsg = resultJson?.getString("error")
-                                    } else {
-                                        val isSuccess = resultJson?.optBoolean("판독_성공", true) ?: true
-                                        if (isSuccess) {
-                                            scanStep = ScanStep.ANALYZED
-                                            firstImageHash = ImageHashUtil.generateImageHash(capturedImage!!)
-                                            lastAnalysisTime = System.currentTimeMillis()
-                                        } else {
-                                            errorMsg = resultJson?.optString("불가_사유", "판독이 불가합니다. 어둡거나 흔들렸다면 밝은 곳에 두고 다시 촬영해주세요.")
-                                            capturedImage = null
-                                            resultJson = null
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    errorMsg = "결과 해석 중 오류가 발생했습니다."
-                                }
-                            }
-                        }) {
-                            Text("AI 분석 시작")
-                        }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("다른 사진 다시 찍기")
                     }
                 }
             }
@@ -579,22 +946,26 @@ fun AiScannerScreen() {
     if (showGuideDialog) {
         AlertDialog(
             onDismissRequest = { showGuideDialog = false },
-            title = { Text("AI 판독 대조 예시") },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("💡 환경부 분리배출 4대 원칙")
+                }
+            },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text("✅ 첫번째 통과 예시 (깨끗한 플라스틱 용기)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text("1. 비운다: 용기 안의 내용물을 완전히 비웁니다.", fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("오염도: 0% (등급: 0)")
-                    Text("피드백: 오염이 전혀 없는 깨끗한 상태입니다. 라벨과 뚜껑을 본체 소재와 다를 경우 분리해서 배출하시면 더 좋습니다.")
-                    
+                    Text("2. 헹군다: 묻어있는 양념이나 이물질을 물로 깨끗이 씻습니다.", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("3. 분리한다: 라벨, 뚜껑 등 재질이 다른 부분을 분리합니다.", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("4. 섞지 않는다: 종류별(플라스틱, 비닐, 캔, 유리 등)로 구분 배출합니다.", fontWeight = FontWeight.Bold)
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Text("❌ 네번째 거절 예시 (오염된 배달 용기)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("오염도: 85% (등급: 3)")
-                    Text("피드백: 양념 얼룩이 아주 심합니다. 휴지로 한 번 닦아낸 후, 세제를 푼 물에 담가 완벽히 오염을 제거해야 재활용이 가능합니다.")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("💡 팁: 오염된 용기는 재활용 공정에서 수자원과 비용을 크게 낭비시킵니다. 물리적으로 세척이 불가능할 경우 종량제 봉투에 버려주세요.", style = MaterialTheme.typography.bodySmall)
+                    Text("🎯 AI 판정 등급 기준", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text("• 등급 0~1 (0~5% 오염): 투명/깨끗함 -> 재활용 가능")
+                    Text("• 등급 2 (6~50% 오염): 세척 가능한 얼룩 -> 세척 후 배출")
+                    Text("• 등급 3 (51~100% 오염): 심한 착색/잔여물 -> 종량제 봉투 배출")
                 }
             },
             confirmButton = {
