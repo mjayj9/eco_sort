@@ -2,19 +2,23 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // 심사 포인트: 영구적인 Security Rules 코드로 DB 에러 방어 및 보안 확보
-    // 유저 문서는 해당 유저 본인만 접근/수정 가능하도록 강력한 인증 제어 적용
+    // 유저 문서: 본인 인증 토큰 소유자만 읽기/생성/수정 가능
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId 
+                    && request.resource.data.points is int 
+                    && request.resource.data.points >= 0;
+      allow update: if request.auth != null && request.auth.uid == userId
+                    && request.resource.data.points is int 
+                    && request.resource.data.points >= 0;
+      allow delete: if false; // 클라이언트 임의 삭제 방지
     }
     
-    // 심사 포인트: 단지별 리더보드/대시보드 데이터를 위한 규칙
-    // 누구나(혹은 로그인한 유저는) 전체 통계를 읽을 수 있게 하되,
-    // 클라이언트의 어뷰징을 막기 위해 원칙적으로 쓰기는 제한.
-    // (본 데모앱 프로토타이핑을 위해 인증된 유저의 update만 일시적 허용)
+    // 아파트 단지 통계: 인증된 사용자 읽기 가능, 단지별 집계 누적은 인증 사용자만 수행
     match /apartments/{apartmentId} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow create, update: if request.auth != null;
+      allow delete: if false;
     }
   }
 }

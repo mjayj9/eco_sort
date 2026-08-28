@@ -36,44 +36,6 @@ fun Bitmap.toBase64AndResize(): String {
     return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
 }
 
-// --- Eco Grade Calculation Engine ---
-
-object EcoGradeCalculator {
-    /**
-     * 오염도(%)를 바탕으로 빈틈없는 분리배출 등급을 산정합니다:
-     * - A등급 (오염도 <= 10.0%): 즉시 분리배출 가능 (포인트 +100P)
-     * - B등급 (10.0% < 오염도 <= 30.0%): 가벼운 헹굼 후 배출 (+70P)
-     * - C등급 (30.0% < 오염도 <= 60.0%): 정밀 세척 필요 (+40P)
-     * - F등급 (오염도 > 60.0%): 재활용 불가, 종량제 봉투 배출 (0P)
-     */
-    fun calculateGrade(pollutionPercent: Double): String {
-        return when {
-            pollutionPercent <= 10.0 -> "A"
-            pollutionPercent <= 30.0 -> "B"
-            pollutionPercent <= 60.0 -> "C"
-            else -> "F"
-        }
-    }
-
-    fun getGradeLevel(pollutionPercent: Double): Int {
-        return when {
-            pollutionPercent <= 10.0 -> 0 // A
-            pollutionPercent <= 30.0 -> 1 // B
-            pollutionPercent <= 60.0 -> 2 // C
-            else -> 3                     // F
-        }
-    }
-
-    fun getPointsForPollution(pollutionPercent: Double): Int {
-        return when {
-            pollutionPercent <= 10.0 -> 100
-            pollutionPercent <= 30.0 -> 70
-            pollutionPercent <= 60.0 -> 40
-            else -> 0
-        }
-    }
-}
-
 object AiVisionRepository {
 
     private fun extractJsonFromResponse(rawText: String): String {
@@ -98,25 +60,26 @@ object AiVisionRepository {
             너는 대한민국 환경부 분리배출 지침 및 AI 비전 기반 배달 쓰레기 분석 전문가 AI야.
             전달된 이미지 속 배달 쓰레기(플라스틱 용기, 비닐, 캔, 유리, 스티로폼, 종이 등)를 시각적으로 분석하여 다음 기준에 따라 반드시 순수 JSON 포맷으로만 응답해.
             
-            [오염도 및 등급 판정 기준]
-            - 등급 0 (오염도 0~1%): 완전히 투명하고 깨끗함. 단순 물방울 수준 -> 재활용 가능
-            - 등급 1 (오염도 2~5%): 옅은 물자국 또는 쉽게 지워지는 먼지 -> 재활용 가능 (가벼운 헹굼 권장)
-            - 등급 2 (오염도 6~50%): 음식물 양념, 국물, 기름때가 묻어있으나 물/세제로 세척 시 제거 가능한 상태 -> 세척 후 분리배출
-            - 등급 3 (오염도 51~100%): 짙은 고추기름, 붉은 양념 착색, 음식물 찌꺼기가 가득 차 있어 세척이 어렵거나 불가능한 상태 -> 일반쓰레기(종량제 봉투) 배출
+            [오염도 및 등급 판정 기준 - EcoGradeCalculator 표준]
+            - 등급 0 (A등급, 오염도 0~10%): 완전히 깨끗하거나 가벼운 물자국 수준 -> 즉시 분리배출 가능 (포인트 +100P)
+            - 등급 1 (B등급, 오염도 11~30%): 옅은 오염 또는 가벼운 먼지 -> 가벼운 헹굼 후 배출 (+70P)
+            - 등급 2 (C등급, 오염도 31~60%): 음식물 양념, 국물, 기름때가 묻어있어 주방세제 세척이 필요한 상태 -> 정밀 세척 후 분리배출 (+40P)
+            - 등급 3 (F등급, 오염도 61~100%): 짙은 착색, 음식물 찌꺼기로 세척이 불가능한 상태 -> 일반쓰레기(종량제 봉투) 배출 (0P)
             
             만약 사진이 너무 어둡거나, 흔들렸거나, 쓰레기 객체가 전혀 보이지 않는 경우 "판독_성공": false 로 응답해.
             
             [반환 JSON 스키마 - 다른 텍스트나 설명 없이 오직 JSON만 반환]:
             {
               "판독_성공": true,
+              "분석모드": "Gemini_AI_비전",
               "재질": "플라스틱", 
               "품목명": "배달 떡볶이 용기",
-              "오염도_퍼센트": 65,
+              "오염도_퍼센트": 45,
               "등급": 2,
               "상태": "붉은 양념 얼룩 및 기름기 오염 감지",
               "피드백": "양념과 기름때가 묻어있습니다. 따뜻한 물과 주방세제로 1~2회 헹군 뒤 배출해주세요. 붉은 착색이 지워지지 않으면 종량제 봉투에 버려야 합니다.",
               "헹굼_권장여부": true,
-              "배출방법": "완전히 세척된 경우 플라스틱 수거함 배출, 세척 불가 시 종량제 봉투 배출",
+              "배출방법": "세척 후 플라스틱 수거함 배출 (착색 심할 시 종량제 봉투 배출)",
               "오염부분_좌표": {
                 "ymin": 0.25,
                 "xmin": 0.3,
@@ -129,6 +92,7 @@ object AiVisionRepository {
             판독 불가 시:
             {
               "판독_성공": false,
+              "분석모드": "Gemini_AI_비전",
               "불가_사유": "사진이 너무 어둡거나 쓰레기 객체를 식별할 수 없습니다. 밝은 조명 아래에서 다시 촬영해주세요."
             }
         """.trimIndent()
@@ -141,6 +105,10 @@ object AiVisionRepository {
                         Part(inlineData = InlineData(mimeType = "image/jpeg", data = base64Img))
                     )
                 )
+            ),
+            generationConfig = com.example.network.GenerationConfig(
+                responseMimeType = "application/json",
+                temperature = 0.2f
             )
         )
 
@@ -149,6 +117,18 @@ object AiVisionRepository {
             try {
                 val response = try {
                     RetrofitClient.service.generateContent(apiKey, requestBody)
+                } catch (e: retrofit2.HttpException) {
+                    if (e.code() in 400..499) {
+                        if (e.code() == 429) {
+                            return@withContext """{"error": "Gemini API 요청 한도를 초과했습니다 (HTTP 429). 1분 후 다시 시도해주세요."}"""
+                        } else if (e.code() == 400 || e.code() == 403) {
+                            return@withContext """{"error": "Gemini API 키가 유효하지 않거나 권한이 없습니다 (HTTP ${e.code()}). 설정에서 API 키를 확인해주세요."}"""
+                        }
+                        throw e
+                    } else {
+                        // 5xx Server error -> try fallback lite model
+                        RetrofitClient.service.generateContentFallback(apiKey, requestBody)
+                    }
                 } catch (e: Exception) {
                     RetrofitClient.service.generateContentFallback(apiKey, requestBody)
                 }
@@ -156,7 +136,6 @@ object AiVisionRepository {
                 val rawText = response.candidates.firstOrNull()?.content?.parts?.firstOrNull()?.text
                 if (!rawText.isNullOrBlank()) {
                     val cleanJson = extractJsonFromResponse(rawText)
-                    // Validate JSON parsing
                     JSONObject(cleanJson)
                     return@withContext cleanJson
                 }
@@ -164,14 +143,13 @@ object AiVisionRepository {
                 if (e.code() == 429) {
                     return@withContext """{"error": "API 분당 최대 요청 수를 초과했습니다 (HTTP 429). 1분 후 다시 시도해주세요."}"""
                 }
-                // Fallback on HTTP error with informative analysis
+                return@withContext """{"error": "AI 서버 통신 오류 (HTTP ${e.code()}): ${e.message()}"}"""
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Network connection failure or offline
             }
         }
 
-        // 2. Real fallback heuristic image analysis (when API key is pending or network is unreachable)
-        // Analyzes actual bitmap color histogram to estimate pollution (e.g. red/oil stains vs clear transparent pixels)
+        // 2. Local heuristic image analysis for offline support
         return@withContext analyzeImageHeuristic(bitmap)
     }
 
@@ -186,7 +164,7 @@ object AiVisionRepository {
             사용자가 쓰레기를 버린 후 촬영한 2차 실천 인증 사진이야.
             사진의 배경이나 주변에 분리수거함(플라스틱/캔/유리/비닐 수거함), 공용 쓰레기통, 클린하우스, 또는 종량제 봉투 등 '올바른 폐기/배출 장소'가 식별되는지 정밀 검정해.
             
-            [반환 JSON 스키마]:
+            [반환 JSON 스키마 - 순수 JSON만 반환]:
             {
               "통과": true,
               "사유": "분리수거함 및 올바른 배출 위치가 정상 확인되었습니다.",
@@ -208,6 +186,10 @@ object AiVisionRepository {
                         Part(inlineData = InlineData(mimeType = "image/jpeg", data = base64Img))
                     )
                 )
+            ),
+            generationConfig = com.example.network.GenerationConfig(
+                responseMimeType = "application/json",
+                temperature = 0.1f
             )
         )
 
@@ -215,6 +197,15 @@ object AiVisionRepository {
             try {
                 val response = try {
                     RetrofitClient.service.generateContent(apiKey, requestBody)
+                } catch (e: retrofit2.HttpException) {
+                    if (e.code() in 400..499) {
+                        if (e.code() == 429) {
+                            return@withContext """{"error": "API 분당 최대 요청 수를 초과했습니다. 잠시 후 다시 시도해주세요."}"""
+                        }
+                        throw e
+                    } else {
+                        RetrofitClient.service.generateContentFallback(apiKey, requestBody)
+                    }
                 } catch (e: Exception) {
                     RetrofitClient.service.generateContentFallback(apiKey, requestBody)
                 }
@@ -230,22 +221,21 @@ object AiVisionRepository {
                     return@withContext """{"error": "API 분당 최대 요청 수를 초과했습니다. 잠시 후 다시 시도해주세요."}"""
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // fall through to fail-safe rejection
             }
         }
 
-        // Real heuristic fallback verification
+        // Fail-safe: Reject verification if AI is unreachable to prevent false reward abuse
         return@withContext """
             {
-              "통과": true,
-              "사유": "분리수거함 및 올바른 배출 장소가 확인되었습니다. (인증 완료)",
-              "배출장소_유형": "단지 내 분리배출 스테이션"
+              "통과": false,
+              "사유": "AI 인증 서버 연결이 원활하지 않습니다. 인터넷 연결 및 API 키 상태를 확인한 후 다시 시도해주세요."
             }
         """.trimIndent()
     }
 
     /**
-     * 로컬 픽셀 컬러 및 채도 분석 기반 정밀 휴리스틱 (오프라인/API 미설정 대비)
+     * 로컬 픽셀 컬러 및 채도 분석 기반 정밀 휴리스틱 (오프라인/API 미설정 시 안전 대비)
      */
     private fun analyzeImageHeuristic(bitmap: Bitmap): String {
         val sampleSize = 32
@@ -261,7 +251,7 @@ object AiVisionRepository {
                 val g = Color.green(pixel)
                 val b = Color.blue(pixel)
 
-                // 붉은 양념 / 기름때 검출 (Red dominance and high chroma)
+                // 붉은 양념 / 기름때 검출
                 if (r > 130 && r > g * 1.3 && r > b * 1.3) {
                     redStainCount++
                 } else if (r < 60 && g < 60 && b < 60) {
@@ -277,12 +267,13 @@ object AiVisionRepository {
             """
             {
               "판독_성공": true,
+              "분석모드": "오프라인_간이추정",
               "재질": "플라스틱 (PET/PP)",
               "품목명": "투명 음료 페트병 / 깨끗한 용기",
               "오염도_퍼센트": 0,
               "등급": 0,
-              "상태": "오염 없는 깨끗한 상태 감지",
-              "피드백": "내용물이 비워져 있고 오염이 전혀 없는 모범적인 상태입니다. 라벨과 뚜껑을 분리하여 투명 페트병 전용 수거함에 배출하세요.",
+              "상태": "오염 없는 깨끗한 상태 감지 (오프라인 추정)",
+              "피드백": "오프라인 분석: 내용물이 비워져 있고 육안 오염이 적습니다. 라벨을 제거하고 분리수거함에 배출하세요.",
               "헹굼_권장여부": false,
               "배출방법": "플라스틱 / 투명 페트 전용 분리수거함에 배출",
               "오염부분_좌표": {"ymin": 0.1, "xmin": 0.2, "ymax": 0.9, "xmax": 0.8},
@@ -290,17 +281,18 @@ object AiVisionRepository {
             }
             """.trimIndent()
         } else {
-            val estimatedPollution = (redRatio * 4.5f).toInt().coerceIn(35, 85)
-            val grade = if (estimatedPollution > 50) 3 else 2
+            val estimatedPollution = (redRatio * 4.5f).toInt().coerceIn(15, 85)
+            val grade = EcoGradeCalculator.getGradeLevel(estimatedPollution.toDouble())
             """
             {
               "판독_성공": true,
+              "분석모드": "오프라인_간이추정",
               "재질": "플라스틱 (배달 용기)",
               "품목명": "양념 배달음식 포장 용기",
               "오염도_퍼센트": $estimatedPollution,
               "등급": $grade,
-              "상태": "붉은 양념 및 기름때 얼룩 감지 (오염도 ${estimatedPollution}%)",
-              "피드백": "용기 내부에 붉은 기름 및 양념이 묻어있습니다. 따뜻한 물과 베이킹소다/주방세제로 세척해주세요. 붉은 착색이 지워지지 않는다면 재활용이 불가하므로 종량제 봉투에 버려주세요.",
+              "상태": "붉은 양념 및 얼룩 감지 (오프라인 추정 오염도 ${estimatedPollution}%)",
+              "피드백": "오프라인 분석: 용기 내부에 붉은 기름 및 양념이 감지되었습니다. 따뜻한 물과 주방세제로 세척해주세요.",
               "헹굼_권장여부": true,
               "배출방법": ${if (grade >= 3) "\"오염도 ${estimatedPollution}%로 세척이 어렵습니다. 종량제 봉투(일반쓰레기)에 배출하세요.\"" else "\"깨끗이 세척 후 플라스틱 전용 수거함에 배출하세요.\""},
               "오염부분_좌표": {"ymin": 0.25, "xmin": 0.2, "ymax": 0.8, "xmax": 0.8},

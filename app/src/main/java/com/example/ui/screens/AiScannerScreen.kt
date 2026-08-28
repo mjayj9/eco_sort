@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.repository.AiVisionRepository
+import com.example.repository.EcoGradeCalculator
 import com.example.repository.FirestoreRepository
 import com.example.util.GlobalState
 import com.example.util.ImageHashUtil
@@ -100,6 +101,17 @@ fun AiScannerScreen() {
 
     // Helper to start real AI analysis
     fun startRealAiAnalysis(bitmap: Bitmap) {
+        if (!GlobalState.canRecycleToday()) {
+            errorMsg = "오늘 분리배출 참여 횟수(최대 15회) 또는 일일 적립 한도(1,500P)를 모두 달성하였습니다. 내일 다시 참여해주세요!"
+            return
+        }
+
+        val currentHash = ImageHashUtil.generateImageHash(bitmap)
+        if (GlobalState.isImageHashDuplicated(currentHash)) {
+            errorMsg = "이미 등록되었거나 매우 유사한 배출 사진입니다. (어뷰징 방지: 중복 사진 감지)"
+            return
+        }
+
         capturedImage = bitmap
         isLoading = true
         loadingMessage = "Gemini AI가 쓰레기 오염도와 재질을 분석 중입니다..."
@@ -116,11 +128,11 @@ fun AiScannerScreen() {
                 if (json.has("error")) {
                     errorMsg = json.getString("error")
                 } else {
-                    val isSuccess = json.optBoolean("판독_성공", true)
+                    val isSuccess = json.optBoolean("판독_성공", false)
                     if (isSuccess) {
                         resultJson = json
                         scanStep = ScanStep.ANALYZED
-                        firstImageHash = ImageHashUtil.generateImageHash(bitmap)
+                        firstImageHash = currentHash
                         lastAnalysisTime = System.currentTimeMillis()
                     } else {
                         errorMsg = json.optString(
@@ -143,8 +155,9 @@ fun AiScannerScreen() {
         val newHash = ImageHashUtil.generateImageHash(bitmap)
         val timeDiff = System.currentTimeMillis() - lastAnalysisTime
 
-        if (newHash == firstImageHash) {
-            errorMsg = "동일한 사진은 2차 인증에 사용할 수 없습니다. (어뷰징 방지: 사진 해시 일치)"
+        val isSimilarToFirst = firstImageHash?.let { ImageHashUtil.isSimilar(newHash, it, threshold = 5) } ?: false
+        if (isSimilarToFirst) {
+            errorMsg = "1차 쓰레기 사진과 동일/유사한 사진은 2차 배출 인증에 사용할 수 없습니다. 배출 장소(분리수거함)가 보이도록 촬영해주세요."
             return
         }
         if (timeDiff < 2000) {
@@ -166,12 +179,12 @@ fun AiScannerScreen() {
                 if (verifyJson.has("error")) {
                     errorMsg = verifyJson.getString("error")
                 } else {
-                    val isPass = verifyJson.optBoolean("통과", true)
+                    val isPass = verifyJson.optBoolean("통과", false)
                     if (isPass) {
                         val material = resultJson?.optString("재질", "플라스틱") ?: "플라스틱"
                         val itemName = resultJson?.optString("품목명", "배달 용기") ?: "배달 용기"
                         val pollution = resultJson?.optInt("오염도_퍼센트", 0) ?: 0
-                        val grade = resultJson?.optInt("등급", 0) ?: 0
+                        val grade = EcoGradeCalculator.getGradeLevel(pollution.toDouble())
 
                         val reward = GlobalState.addRecycle(
                             material = material,
@@ -699,6 +712,7 @@ fun AiScannerScreen() {
                     val itemName = it.optString("품목명", "배달 용기")
                     val feedback = it.optString("피드백", "")
                     val stateText = it.optString("상태", material)
+                    val analysisMode = it.optString("분석모드", "Gemini_AI_비전")
 
                     val isPass = grade <= 1
                     val isWashable = grade == 2
@@ -714,12 +728,28 @@ fun AiScannerScreen() {
                         else -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
                     }
                     val classificationText = when {
-                        isPass -> "재활용 가능"
-                        isWashable -> "세척 후 분리배출"
-                        else -> "일반쓰레기 (종량제)"
+                        grade == 0 -> "A등급 (즉시 배출)"
+                        grade == 1 -> "B등급 (가벼운 헹굼)"
+                        grade == 2 -> "C등급 (세척 후 배출)"
+                        else -> "F등급 (일반쓰레기)"
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
+
+                    if (analysisMode == "오프라인_간이추정") {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        ) {
+                            Text(
+                                "⚡ [오프라인 간이 분석 모드] 네트워크 미연결 상태로 로컬 비전 알고리즘을 통해 추정되었습니다.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(10.dp),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
 
                     // Result Header
                     Row(
@@ -968,10 +998,11 @@ fun AiScannerScreen() {
                     Text("4. 섞지 않는다: 종류별(플라스틱, 비닐, 캔, 유리 등)로 구분 배출합니다.", fontWeight = FontWeight.Bold)
 
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("🎯 AI 판정 등급 기준", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    Text("• 등급 0~1 (0~5% 오염): 투명/깨끗함 -> 재활용 가능")
-                    Text("• 등급 2 (6~50% 오염): 세척 가능한 얼룩 -> 세척 후 배출")
-                    Text("• 등급 3 (51~100% 오염): 심한 착색/잔여물 -> 종량제 봉투 배출")
+                    Text("🎯 AI 판정 등급 및 포인트 기준", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text("• A등급 (0~10% 오염): 투명/깨끗함 -> 즉시 배출 (+100P)")
+                    Text("• B등급 (11~30% 오염): 가벼운 얼룩 -> 가벼운 헹굼 후 배출 (+70P)")
+                    Text("• C등급 (31~60% 오염): 음식물/기름때 -> 주방세제 세척 후 배출 (+40P)")
+                    Text("• F등급 (61~100% 오염): 심한 착색/찌꺼기 -> 일반쓰레기(종량제) 배출 (0P)")
                 }
             },
             confirmButton = {

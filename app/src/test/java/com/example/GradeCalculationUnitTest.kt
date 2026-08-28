@@ -84,4 +84,26 @@ class GradeCalculationUnitTest {
         assertFalse(json.getBoolean("판독_성공"))
         assertTrue(json.getString("불가_사유").isNotEmpty())
     }
+
+    @Test
+    fun testImageHashPerceptualSimilarity() {
+        val hash1 = "1111000011110000111100001111000011110000111100001111000011110000"
+        val hashIdentical = "1111000011110000111100001111000011110000111100001111000011110000"
+        val hashSlightlyDiff = "1111000011110000111100001111000011110000111100001111000011110011" // 2 bit difference
+        val hashCompletelyDiff = "0000111100001111000011110000111100001111000011110000111100001111" // 64 bit difference
+
+        assertTrue(com.example.util.ImageHashUtil.isSimilar(hash1, hashIdentical, threshold = 5))
+        assertTrue(com.example.util.ImageHashUtil.isSimilar(hash1, hashSlightlyDiff, threshold = 5))
+        assertFalse(com.example.util.ImageHashUtil.isSimilar(hash1, hashCompletelyDiff, threshold = 5))
+    }
+
+    @Test
+    fun testPasswordHashing() {
+        val pass = "secret123"
+        val hash1 = com.example.util.GlobalState.hashPassword(pass)
+        val hash2 = com.example.util.GlobalState.hashPassword(pass)
+        assertEquals(hash1, hash2)
+        assertFalse(hash1 == pass)
+        assertEquals(64, hash1.length) // SHA-256 hex length
+    }
 }

@@ -40,7 +40,7 @@ fun LoginScreen(onLoginSuccess: (isNewUser: Boolean) -> Unit) {
 
     // Login Fields
     var loginEmail by remember { mutableStateOf(GlobalState.userEmail) }
-    var loginPassword by remember { mutableStateOf("123456") }
+    var loginPassword by remember { mutableStateOf("") }
     var loginPasswordVisible by remember { mutableStateOf(false) }
     var rememberMe by remember { mutableStateOf(true) }
 
@@ -273,7 +273,7 @@ fun LoginScreen(onLoginSuccess: (isNewUser: Boolean) -> Unit) {
                                 val isNewUser = GlobalState.apartmentId.isBlank()
                                 onLoginSuccess(isNewUser)
                             } else {
-                                errorMessage = "비밀번호가 올바르지 않습니다. 다시 확인해주세요."
+                                errorMessage = "이메일 또는 비밀번호가 올바르지 않습니다."
                             }
                         }
                     },
@@ -315,8 +315,8 @@ fun LoginScreen(onLoginSuccess: (isNewUser: Boolean) -> Unit) {
                         isLoading = true
                         coroutineScope.launch {
                             kotlinx.coroutines.delay(400)
-                            val googleEmail = if (loginEmail.contains("@gmail.com")) loginEmail else "mjayj9@gmail.com"
-                            GlobalState.loginUser(googleEmail, "")
+                            val googleEmail = if (loginEmail.contains("@gmail.com")) loginEmail.trim().lowercase() else "user@ecopick.kr"
+                            GlobalState.registerUser("Google 사용자", googleEmail, "google_oauth_pass", GlobalState.apartmentId)
                             isLoading = false
                             Toast.makeText(context, "Google 계정(${GlobalState.userEmail})으로 연동되었습니다.", Toast.LENGTH_SHORT).show()
                             onLoginSuccess(false)

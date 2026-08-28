@@ -8,6 +8,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.BuildConfig
+import com.example.repository.EcoGradeCalculator
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,8 +41,8 @@ object GlobalState {
     private var prefs: SharedPreferences? = null
 
     var isLoggedIn by mutableStateOf(false)
-    var userName by mutableStateOf("정민재")
-    var userEmail by mutableStateOf("mjayj9@gmail.com")
+    var userName by mutableStateOf("에코회원")
+    var userEmail by mutableStateOf("")
     var apartmentId by mutableStateOf("래미안 에코팰리스")
     var currentPoints by mutableIntStateOf(5000) // Default bonus points for demo/experience
     var targetGoal by mutableIntStateOf(10)
@@ -56,7 +58,7 @@ object GlobalState {
     val recycleHistory = mutableStateListOf<RecycleRecord>()
     val redeemedCoupons = mutableStateListOf<CouponRecord>()
 
-    // Local user registry: email -> json/pair (name, password, apartment)
+    // Local user registry: email -> UserAccount
     private val registeredUsers = mutableMapOf<String, UserAccount>()
 
     data class UserAccount(
@@ -66,8 +68,16 @@ object GlobalState {
         val apartment: String
     )
 
+    fun hashPassword(password: String): String {
+        val salted = "ecopick_salt_$password"
+        val bytes = salted.toByteArray()
+        val md = MessageDigest.getInstance("SHA-256")
+        val digest = md.digest(bytes)
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
     val isAdmin: Boolean
-        get() = userEmail == "mjayj9@gmail.com" || userEmail == "2025186@snu.ms.kr" || userEmail.contains("admin")
+        get() = BuildConfig.DEBUG && (userEmail == "admin@ecopick.kr" || userEmail == "admin@ecopick.local")
 
     fun init(context: Context) {
         if (prefs == null) {
@@ -79,8 +89,8 @@ object GlobalState {
     private fun loadFromPrefs() {
         prefs?.let { p ->
             isLoggedIn = p.getBoolean("is_logged_in", false)
-            userName = p.getString("user_name", "정민재") ?: "정민재"
-            userEmail = p.getString("user_email", "mjayj9@gmail.com") ?: "mjayj9@gmail.com"
+            userName = p.getString("user_name", "에코회원") ?: "에코회원"
+            userEmail = p.getString("user_email", "") ?: ""
             apartmentId = p.getString("apartment_id", "래미안 에코팰리스") ?: "래미안 에코팰리스"
             currentPoints = p.getInt("current_points", 5000)
             targetGoal = p.getInt("target_goal", 10)
@@ -90,11 +100,15 @@ object GlobalState {
             notifyRecycleDay = p.getBoolean("notify_recycle", true)
             notifyPoints = p.getBoolean("notify_points", true)
             notifyRanking = p.getBoolean("notify_ranking", false)
+
+            dailyRecycleCount = p.getInt("daily_recycle_count", 0)
+            dailyPointsEarned = p.getInt("daily_points_earned", 0)
+            lastRecordedDay = p.getString("last_recorded_day", "") ?: ""
         }
 
-        // Initialize default demo account in registry
-        registeredUsers["mjayj9@gmail.com"] = UserAccount("정민재", "mjayj9@gmail.com", "123456", "래미안 에코팰리스")
-        registeredUsers["2025186@snu.ms.kr"] = UserAccount("SNUMS 대표", "2025186@snu.ms.kr", "123456", "래미안 에코팰리스")
+        // Initialize default sample demo accounts with hashed passwords
+        registeredUsers["demo@ecopick.kr"] = UserAccount("에코체험자", "demo@ecopick.kr", hashPassword("ecopick123"), "래미안 에코팰리스")
+        registeredUsers["admin@ecopick.kr"] = UserAccount("관리사무소", "admin@ecopick.kr", hashPassword("admin123"), "래미안 에코팰리스")
 
         if (recycleHistory.isEmpty()) {
             recycleHistory.add(
@@ -103,8 +117,8 @@ object GlobalState {
                     itemName = "생수 500ml 페트병",
                     pollutionPercent = 0,
                     grade = 0,
-                    pointsEarned = 50,
-                    imageHash = "init_hash_1",
+                    pointsEarned = 100,
+                    imageHash = "1111000011110000111100001111000011110000111100001111000011110000",
                     dateString = "2026-08-27 14:20"
                 )
             )
@@ -113,9 +127,9 @@ object GlobalState {
                     material = "플라스틱",
                     itemName = "배달 샐러드 보울",
                     pollutionPercent = 4,
-                    grade = 1,
-                    pointsEarned = 50,
-                    imageHash = "init_hash_2",
+                    grade = 0,
+                    pointsEarned = 100,
+                    imageHash = "0000111100001111000011110000111100001111000011110000111100001111",
                     dateString = "2026-08-26 19:10"
                 )
             )
@@ -125,8 +139,8 @@ object GlobalState {
                     itemName = "탄산음료 캔",
                     pollutionPercent = 0,
                     grade = 0,
-                    pointsEarned = 50,
-                    imageHash = "init_hash_3",
+                    pointsEarned = 100,
+                    imageHash = "1010101010101010101010101010101010101010101010101010101010101010",
                     dateString = "2026-08-25 12:45"
                 )
             )
@@ -147,13 +161,19 @@ object GlobalState {
             putBoolean("notify_recycle", notifyRecycleDay)
             putBoolean("notify_points", notifyPoints)
             putBoolean("notify_ranking", notifyRanking)
+
+            putInt("daily_recycle_count", dailyRecycleCount)
+            putInt("daily_points_earned", dailyPointsEarned)
+            putString("last_recorded_day", lastRecordedDay)
             apply()
         }
     }
 
     fun registerUser(name: String, email: String, password: String, apartment: String): Boolean {
         val cleanEmail = email.trim().lowercase()
-        registeredUsers[cleanEmail] = UserAccount(name.trim(), cleanEmail, password, apartment)
+        if (cleanEmail.isBlank() || password.isBlank()) return false
+        val hashed = hashPassword(password)
+        registeredUsers[cleanEmail] = UserAccount(name.trim(), cleanEmail, hashed, apartment)
         userName = name.trim()
         userEmail = cleanEmail
         apartmentId = apartment
@@ -164,41 +184,30 @@ object GlobalState {
 
     fun loginUser(email: String, password: String): Boolean {
         val cleanEmail = email.trim().lowercase()
-        val account = registeredUsers[cleanEmail]
-        if (account != null) {
-            if (account.passwordHash == password || password.isBlank()) {
-                userName = account.name
-                userEmail = account.email
-                if (account.apartment.isNotEmpty()) {
-                    apartmentId = account.apartment
-                }
-                isLoggedIn = true
-                saveToPrefs()
-                return true
-            } else {
-                return false
+        if (cleanEmail.isBlank() || password.isBlank()) return false
+        val account = registeredUsers[cleanEmail] ?: return false
+        val inputHash = hashPassword(password)
+        if (account.passwordHash == inputHash) {
+            userName = account.name
+            userEmail = account.email
+            if (account.apartment.isNotEmpty()) {
+                apartmentId = account.apartment
             }
-        } else {
-            // New instant account creation
-            val defaultName = cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
-            registeredUsers[cleanEmail] = UserAccount(defaultName, cleanEmail, password, apartmentId)
-            userName = defaultName
-            userEmail = cleanEmail
             isLoggedIn = true
             saveToPrefs()
             return true
         }
+        return false
     }
 
     fun resetPassword(email: String, newPass: String): Boolean {
         val cleanEmail = email.trim().lowercase()
         val account = registeredUsers[cleanEmail]
         return if (account != null) {
-            account.passwordHash = newPass
+            account.passwordHash = hashPassword(newPass)
             true
         } else {
-            registeredUsers[cleanEmail] = UserAccount("에코회원", cleanEmail, newPass, apartmentId)
-            true
+            false
         }
     }
 
@@ -211,17 +220,22 @@ object GlobalState {
         isLoggedIn = false
         currentPoints = 0
         currentCount = 0
+        dailyRecycleCount = 0
+        dailyPointsEarned = 0
         recycleHistory.clear()
         redeemedCoupons.clear()
-        registeredUsers.remove(userEmail)
+        if (userEmail.isNotBlank()) {
+            registeredUsers.remove(userEmail)
+        }
         userEmail = ""
-        userName = ""
-        saveToPrefs()
+        userName = "에코회원"
+        customApiKey = ""
+        prefs?.edit()?.clear()?.apply()
     }
 
     // Daily quota & anti-abuse tracking
-    var dailyRecycleCount by mutableStateOf(0)
-    var dailyPointsEarned by mutableStateOf(0)
+    var dailyRecycleCount by mutableIntStateOf(0)
+    var dailyPointsEarned by mutableIntStateOf(0)
     private var lastRecordedDay = ""
 
     const val MAX_DAILY_RECYCLE_COUNT = 15
@@ -231,18 +245,26 @@ object GlobalState {
         return if (customApiKey.isNotBlank()) customApiKey.trim() else BuildConfig.GEMINI_API_KEY
     }
 
-    private fun checkAndResetDailyQuota() {
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+    fun checkAndResetDailyQuota() {
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         if (lastRecordedDay != today) {
             dailyRecycleCount = 0
             dailyPointsEarned = 0
             lastRecordedDay = today
+            saveToPrefs()
         }
     }
 
     fun canRecycleToday(): Boolean {
         checkAndResetDailyQuota()
         return dailyRecycleCount < MAX_DAILY_RECYCLE_COUNT && dailyPointsEarned < MAX_DAILY_POINTS
+    }
+
+    fun isImageHashDuplicated(newHash: String): Boolean {
+        if (newHash.isBlank()) return false
+        return recycleHistory.any { record ->
+            ImageHashUtil.isSimilar(record.imageHash, newHash, threshold = 5)
+        }
     }
 
     fun addRecycle(
@@ -263,13 +285,8 @@ object GlobalState {
             totalAppRecycled++
             dailyRecycleCount++
 
-            // 오염도 기반 차등 리워드 (A: 100P, B: 70P, C: 40P, F: 0P)
-            var reward = when {
-                pollutionPercent <= 10 -> 100
-                pollutionPercent <= 30 -> 70
-                pollutionPercent <= 60 -> 40
-                else -> 0
-            }
+            // EcoGradeCalculator 기준 단일 진실 소스로 포인트 산정 (A: 100P, B: 70P, C: 40P, F: 0P)
+            var reward = EcoGradeCalculator.getPointsForPollution(pollutionPercent.toDouble())
 
             // 목표 달성 시 추가 보너스 지급 (목표치 비례: 10개 달성시 +200P)
             if (currentCount == targetGoal) {

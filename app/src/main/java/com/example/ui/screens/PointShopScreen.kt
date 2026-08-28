@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.BuildConfig
 import com.example.util.CouponRecord
 import com.example.util.GlobalState
 import java.text.NumberFormat
@@ -167,8 +168,8 @@ fun PointShopScreen() {
                 }
             }
 
-            // Quick Admin Point Recharge for Evaluation
-            if (GlobalState.isAdmin) {
+            // Quick Admin Point Recharge for Evaluation (DEBUG only)
+            if (BuildConfig.DEBUG && GlobalState.isAdmin) {
                 Button(
                     onClick = {
                         GlobalState.rechargePoints(5000)

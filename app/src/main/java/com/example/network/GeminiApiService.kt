@@ -5,13 +5,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.ResponseBody
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.Header
 import retrofit2.http.POST
-import retrofit2.http.Query
-import retrofit2.http.Streaming
+import retrofit2.http.Path
 
 // --- Common Data Classes ---
 
@@ -41,19 +40,8 @@ data class InlineData(
 )
 
 @Serializable
-data class ResponseFormat(
-    val text: ResponseFormatText? = null
-)
-
-@Serializable
-data class ResponseFormatText(
-    val mimeType: String,
-    val schema: JsonObject? = null
-)
-
-@Serializable
 data class GenerationConfig(
-    val responseFormat: ResponseFormat? = null,
+    val responseMimeType: String? = "application/json",
     val temperature: Float? = null,
     val topP: Float? = null,
     val topK: Int? = null
@@ -61,12 +49,12 @@ data class GenerationConfig(
 
 @Serializable
 data class GenerateContentResponse(
-    val candidates: List<Candidate>
+    val candidates: List<Candidate> = emptyList()
 )
 
 @Serializable
 data class Candidate(
-    val content: Content
+    val content: Content? = null
 )
 
 // --- Retrofit Setup ---
@@ -77,15 +65,22 @@ object GeminiModelConstants {
 }
 
 interface GeminiApiService {
+    @POST("v1beta/models/{model}:generateContent")
+    suspend fun generateContentWithModel(
+        @Path("model") model: String,
+        @Header("x-goog-api-key") apiKey: String,
+        @Body request: GenerateContentRequest
+    ): GenerateContentResponse
+
     @POST("v1beta/models/gemini-2.5-flash:generateContent")
     suspend fun generateContent(
-        @Query("key") apiKey: String,
+        @Header("x-goog-api-key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
 
     @POST("v1beta/models/gemini-2.5-flash-lite:generateContent")
     suspend fun generateContentFallback(
-        @Query("key") apiKey: String,
+        @Header("x-goog-api-key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
 }
@@ -94,13 +89,16 @@ object RetrofitClient {
     private const val BASE_URL = "https://generativelanguage.googleapis.com/"
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
     val service: GeminiApiService by lazy {
-        val json = Json { ignoreUnknownKeys = true }
+        val json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
         val retrofit = Retrofit.Builder()
             .baseUrl(BASE_URL)
             .client(okHttpClient)
